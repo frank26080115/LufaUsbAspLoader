@@ -6,6 +6,11 @@ The goal is to make a bootloader for the USB capable AVR microcontrollers, but:
    * this is a requirement because the internal RC oscillator of the U4 series is only accurate enough for low speed USB devices, not full speed USB
  * compatible with AVRDUDE
 
+== Version 2012-07-10-18:30 ==
+
+ * Discovered that a 4048 byte file wouldn't verify properly, the writing works but reading had a tiny bug
+ * Fixed the above bug
+
 == Version 2012-07-10-00:02 ==
 
  * Fixed AVRDUDE errors

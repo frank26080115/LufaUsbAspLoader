@@ -182,10 +182,8 @@ void EVENT_USB_Device_ControlRequest(void)
     // code below is copied from USBaspLoader
     
 	usbRequest_t    *rq = (usbRequest_t *)(&USB_ControlRequest); // typecast convert from LUFA datatype to V-USB datatype
-	uint8_t           len = 1; // this is 1 not 0, 0 makes AVRDUDE spit out errors, 1 makes everything ok
-	// this means something is always sent back
-    static uint8_t    replyBuffer[SPM_PAGESIZE + 8];
-    replyBuffer[0] = 0; // probably not needed
+	uint8_t         len = 0;
+    static uint8_t    replyBuffer[512];
 
     if(rq->bRequest == USBASP_FUNC_TRANSMIT){   /* emulate parts of ISP protocol */
         uint8_t rval = 0;
@@ -204,7 +202,7 @@ void EVENT_USB_Device_ControlRequest(void)
 #if HAVE_CHIP_ERASE
         }else if(rq->wValue.bytes[0] == 0xac && rq->wValue.bytes[1] == 0x80){  /* chip erase */
             addr_t addr;
-            for(addr = 0; addr < FLASHEND + 1 - 2048; addr += SPM_PAGESIZE) {
+            for(addr = 0; addr < FLASHEND + 1 - (2048 * 2); addr += SPM_PAGESIZE) {
                 /* wait and erase page */
 #   ifndef NO_FLASH_WRITE
                 boot_spm_busy_wait();
@@ -227,6 +225,8 @@ void EVENT_USB_Device_ControlRequest(void)
 #if (FLASHEND) > 0xffff
             currentAddress.w[1] = rq->wIndex.word;
 #endif
+        len = 1;
+        replyBuffer[0] = 0; // probably not needed
         }else{
             bytesRemaining = rq->wLength.bytes[0];
             /* if(rq->bRequest == USBASP_FUNC_WRITEFLASH) only evaluated during writeFlash anyway */
@@ -240,55 +240,64 @@ void EVENT_USB_Device_ControlRequest(void)
 #if BOOTLOADER_CAN_EXIT
     }else if(rq->bRequest == USBASP_FUNC_DISCONNECT){
         RunBootloader = false;      /* allow proper shutdown/close of connection */
+        len = 1;
+        replyBuffer[0] = 0; // probably not needed
 #endif
     }else{
         /* ignore: USBASP_FUNC_CONNECT */
+        len = 1;
+        replyBuffer[0] = 0; // probably not needed
     }
     
     // the code below pretends to be the stuff that happens after usbFunctionSetup returns "len"
     
-    Endpoint_ClearSETUP(); // ClearSETUP required here or else AVRDUDE gives "error: programm enable: target doesn't answer. 0"
-    Endpoint_SelectEndpoint(0);
-    
-    if ((USB_ControlRequest.bmRequestType & 0x80) == REQDIR_DEVICETOHOST)
+    if (len > 0)
     {
-        if (len == 0xFF) // this means either usbFunctionRead or usbFunctionWrite is needed, but now we want device to host, so we run usbFunctionRead
+        Endpoint_ClearSETUP(); // ClearSETUP required here or else AVRDUDE gives "error: programm enable: target doesn't answer. 0"
+        Endpoint_SelectEndpoint(0);
+        
+        if ((USB_ControlRequest.bmRequestType & 0x80) == REQDIR_DEVICETOHOST)
         {
-            len = usbFunctionRead(replyBuffer, rq->wLength.bytes[0]);
-            Endpoint_Write_Control_Stream_LE(replyBuffer, len);
-            Endpoint_ClearOUT();
-        }
-        else
-        {
-            // len != 0xFF means send the replyBuffer without usbFunctionRead          
-            Endpoint_Write_Control_Stream_LE(replyBuffer, len);
-            Endpoint_ClearOUT();
-        }
-    }
-    else // HOST to DEVICE
-    {
-        if (len == 0xFF) // this means either usbFunctionRead or usbFunctionWrite is needed, but now we want device to host, so we run usbFunctionWrite
-        {
-            for ( ; ; ) // this loop keeps feeding usbFunctionWrite until the last Byte is received
+            while (Endpoint_IsINReady() == 0);
+            
+            if (len == 0xFF) // this means either usbFunctionRead or usbFunctionWrite is needed, but now we want device to host, so we run usbFunctionRead
             {
-                len = Endpoint_BytesInEndpoint(); // check how many to feed
-                if (len != 0)
+                len = usbFunctionRead(replyBuffer, rq->wLength.bytes[0]);
+                Endpoint_Write_Control_Stream_LE(replyBuffer, len);
+                Endpoint_ClearOUT();
+            }
+            else
+            {
+                // len != 0xFF means send the replyBuffer without usbFunctionRead          
+                Endpoint_Write_Control_Stream_LE(replyBuffer, len);
+                Endpoint_ClearOUT();
+            }
+        }
+        else // HOST to DEVICE
+        {
+            if (len == 0xFF) // this means either usbFunctionRead or usbFunctionWrite is needed, but now we want device to host, so we run usbFunctionWrite
+            {
+                for ( ; ; ) // this loop keeps feeding usbFunctionWrite until the last Byte is received
                 {
-                    Endpoint_Read_Control_Stream_LE(replyBuffer, len);
-                    uint8_t isLast = usbFunctionWrite(replyBuffer, len);
-                    if (isLast)
+                    len = Endpoint_BytesInEndpoint(); // check how many to feed
+                    if (len != 0)
                     {
-                        // last byte received, finish up
-                        Endpoint_ClearStatusStage();
-                        break;
+                        Endpoint_Read_Control_Stream_LE(replyBuffer, len);
+                        uint8_t isLast = usbFunctionWrite(replyBuffer, len);
+                        if (isLast)
+                        {
+                            // last byte received, finish up
+                            Endpoint_ClearStatusStage();
+                            break;
+                        }
                     }
                 }
             }
-        }
-        else
-        {
-            // this should never be reached
-            Endpoint_ClearStatusStage();
+            else
+            {
+                // this should never be reached
+                Endpoint_ClearStatusStage();
+            }
         }
     }
 }
