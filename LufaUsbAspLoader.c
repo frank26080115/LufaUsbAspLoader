@@ -170,13 +170,22 @@ static void SetupHardware(void)
  */
 void EVENT_USB_Device_ControlRequest(void)
 {
-    if (USB_ControlRequest.bmRequestType != (REQDIR_DEVICETOHOST | REQTYPE_VENDOR | REQREC_DEVICE) && USB_ControlRequest.bmRequestType != (REQDIR_HOSTTODEVICE | REQTYPE_VENDOR | REQREC_DEVICE)) return; // if not from AVRDUDE to USBasp, then let LUFA internal handle it
+    if ((USB_ControlRequest.bmRequestType & 0x60) != REQTYPE_VENDOR) return; // let LUFA internal code handle this
+    
+    if (USB_ControlRequest.bmRequestType != (REQDIR_DEVICETOHOST | REQTYPE_VENDOR | REQREC_DEVICE) && USB_ControlRequest.bmRequestType != (REQDIR_HOSTTODEVICE | REQTYPE_VENDOR | REQREC_DEVICE))
+    {
+        // hmm, this shouldn't happen, just clear it
+        Endpoint_ClearStatusStage();
+        return;
+    }
     
     // code below is copied from USBaspLoader
     
 	usbRequest_t    *rq = (usbRequest_t *)(&USB_ControlRequest); // typecast convert from LUFA datatype to V-USB datatype
-	uint8_t           len = 0;
+	uint8_t           len = 1; // this is 1 not 0, 0 makes AVRDUDE spit out errors, 1 makes everything ok
+	// this means something is always sent back
     static uint8_t    replyBuffer[SPM_PAGESIZE + 8];
+    replyBuffer[0] = 0; // probably not needed
 
     if(rq->bRequest == USBASP_FUNC_TRANSMIT){   /* emulate parts of ISP protocol */
         uint8_t rval = 0;
@@ -238,58 +247,48 @@ void EVENT_USB_Device_ControlRequest(void)
     
     // the code below pretends to be the stuff that happens after usbFunctionSetup returns "len"
     
-    if (len > 0) // something to do
+    Endpoint_ClearSETUP(); // ClearSETUP required here or else AVRDUDE gives "error: programm enable: target doesn't answer. 0"
+    Endpoint_SelectEndpoint(0);
+    
+    if ((USB_ControlRequest.bmRequestType & 0x80) == REQDIR_DEVICETOHOST)
     {
-        Endpoint_ClearSETUP();
-        Endpoint_SelectEndpoint(0);
-        
-        if ((USB_ControlRequest.bmRequestType & 0x80) == REQDIR_DEVICETOHOST)
+        if (len == 0xFF) // this means either usbFunctionRead or usbFunctionWrite is needed, but now we want device to host, so we run usbFunctionRead
         {
-            if (len == 0xFF) // this means either usbFunctionRead or usbFunctionWrite is needed, but now we want device to host, so we run usbFunctionRead
-            {
-                len = usbFunctionRead(replyBuffer, rq->wLength.bytes[0]);
-                Endpoint_Write_Control_Stream_LE(replyBuffer, len);
-                Endpoint_ClearOUT();
-            }
-            else
-            {
-                // len != 0xFF means send the replyBuffer without usbFunctionRead          
-                Endpoint_Write_Control_Stream_LE(replyBuffer, len);
-                Endpoint_ClearOUT();
-            }
+            len = usbFunctionRead(replyBuffer, rq->wLength.bytes[0]);
+            Endpoint_Write_Control_Stream_LE(replyBuffer, len);
+            Endpoint_ClearOUT();
         }
-        else // HOST to DEVICE
+        else
         {
-            if (len == 0xFF) // this means either usbFunctionRead or usbFunctionWrite is needed, but now we want device to host, so we run usbFunctionWrite
+            // len != 0xFF means send the replyBuffer without usbFunctionRead          
+            Endpoint_Write_Control_Stream_LE(replyBuffer, len);
+            Endpoint_ClearOUT();
+        }
+    }
+    else // HOST to DEVICE
+    {
+        if (len == 0xFF) // this means either usbFunctionRead or usbFunctionWrite is needed, but now we want device to host, so we run usbFunctionWrite
+        {
+            for ( ; ; ) // this loop keeps feeding usbFunctionWrite until the last Byte is received
             {
-                for ( ; ; ) // this loop keeps feeding usbFunctionWrite until the last Byte is received
+                len = Endpoint_BytesInEndpoint(); // check how many to feed
+                if (len != 0)
                 {
-                    len = Endpoint_BytesInEndpoint(); // check how many to feed
-                    if (len != 0)
+                    Endpoint_Read_Control_Stream_LE(replyBuffer, len);
+                    uint8_t isLast = usbFunctionWrite(replyBuffer, len);
+                    if (isLast)
                     {
-                        Endpoint_Read_Control_Stream_LE(replyBuffer, len);
-                        uint8_t isLast = usbFunctionWrite(replyBuffer, len);
-                        if (isLast)
-                        {
-                            // last byte received, finish up
-                            Endpoint_ClearStatusStage();
-                            break;
-                        }
-                        /*
-                        else
-                        {
-                            Endpoint_ClearIN(); // we didn't take in all the data but the endpoint isn't free, free it
-                            // calling ClearIN here does not work
-                        }
-                        //*/
+                        // last byte received, finish up
+                        Endpoint_ClearStatusStage();
+                        break;
                     }
                 }
             }
-            else
-            {
-                // technically this should never be reached
-                Endpoint_ClearStatusStage();
-            }
+        }
+        else
+        {
+            // this should never be reached
+            Endpoint_ClearStatusStage();
         }
     }
 }
