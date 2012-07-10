@@ -5,7 +5,11 @@ The goal is to make a bootloader for the USB capable AVR microcontrollers, but:
  * using low speed USB instead of full speed
    * this is a requirement because the internal RC oscillator of the U4 series is only accurate enough for low speed USB devices, not full speed USB
  * compatible with AVRDUDE
- 
+
+== Version 2012-07-10-00:02 ==
+
+ * Fixed AVRDUDE errors
+
 == Version 2012-07-09-22:50 ==
  
  * Put on GitHub for the first time, my first time putting something on GitHub
